@@ -14,6 +14,10 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # Generate service interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -21,12 +25,32 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-# Create talker executable
-add_executable(talker src/publisher_member_function.cpp)
-ament_target_dependencies(talker
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
+
+# Create library with publisher implementation
+add_library(minimal_publisher_lib src/minimal_publisher.cpp)
+target_include_directories(minimal_publisher_lib PUBLIC include)
+ament_target_dependencies(minimal_publisher_lib
   rclcpp
   std_msgs
   rosidl_default_runtime
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  geometry_msgs
+)
+target_link_libraries(minimal_publisher_lib "${cpp_typesupport_target}")
+
+# Create talker executable
+add_executable(talker src/publisher_member_function.cpp)
+target_link_libraries(talker minimal_publisher_lib)
+# Set RPATH so executable can find the library at runtime
+# This ensures the library is found without needing LD_LIBRARY_PATH
+set_target_properties(talker PROPERTIES
+  INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}"
+  BUILD_WITH_INSTALL_RPATH TRUE
+  INSTALL_RPATH_USE_LINK_PATH TRUE
 )
 
 # Create listener executable
@@ -36,33 +60,57 @@ ament_target_dependencies(listener
   std_msgs
 )
 
-# Install executables
+# Install executables and library
 install(TARGETS
   talker
   listener
+  minimal_publisher_lib
   DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY include/
+  DESTINATION include)
 
 # Install launch files
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install scripts
+install(PROGRAMS scripts/generate_tf_frames.sh
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Testing
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  # The following line skips the linter which checks for copyrights
-  # Comment the line when a copyright and license is added to all source files
-  set(ament_cmake_copyright_FOUND TRUE)
-  # The following line skips cpplint (only works in a git repo)
-  # Comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
-  set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
+  find_package(Catch2 2 REQUIRED)
+  set(TEST_SOURCES
+    test/talker_integration_test.cpp
+  )
+
+  add_executable(talker_integration_test ${TEST_SOURCES})
+  target_link_libraries(talker_integration_test
+    "${cpp_typesupport_target}"
+    minimal_publisher_lib
+    Catch2::Catch2
+  )
+  ament_target_dependencies(talker_integration_test
+    rclcpp
+    std_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
+  add_test(NAME talker_integration_test COMMAND $<TARGET_FILE:talker_integration_test>)
+  set_tests_properties(talker_integration_test PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/ament_cmake_test_stub:$ENV{PYTHONPATH}")
 endif()
 
-rosidl_get_typesupport_target(cpp_typesupport_target
-  ${PROJECT_NAME} rosidl_typesupport_cpp)
-
 target_link_libraries(talker "${cpp_typesupport_target}")
+
+# Export library so it can be found at runtime
+# The library path will be added to LD_LIBRARY_PATH by the setup script
+ament_export_libraries(minimal_publisher_lib)
 
 ament_package()
